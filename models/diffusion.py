@@ -245,6 +245,25 @@ class UNET(nn.Module):
             ]
         )
 
+    def forward(self, x, context, timestep):
+        # x: (B, 4, H/8, W/8)
+        # context: (B, seq_len, dim)
+        # timestep: (1, 1280)
+
+        skip_connection = []
+        # Encode
+        for layers in self.encoders:
+            x = layers(x, context, timestep)
+            skip_connection.append(x)
+        # Bottleneck
+        x = self.bottleneck(x)
+        # Decode
+        for layers in self.decoder:
+            x = torch.cat([x, skip_connection.pop()], dim=1)
+            x = layers(x, context, timestep)
+
+        return x
+
 
 class UNET_OutputLayer(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
