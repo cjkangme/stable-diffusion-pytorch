@@ -71,6 +71,6 @@ class CLIP(nn.Module):
 
         # (B, seq_len, d_embed)
         output = self.layernorm(state)
-        
+
         # (B, seq_len, d_embed)
         return output

@@ -20,14 +20,19 @@ class TimeEmbedding(nn.Module):
         x = self.linear_2(x)
 
         return x
-    
-class UNET_Residual(nn.module):
+
+
+class UNET_ResidualBlock(nn.module):
     def __init__(self, in_channels: int, out_channels: int, d_time=1280):
         self.groupnorm_feature = nn.GroupNorm(32, in_channels)
-        self.conv_feature = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv_feature = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, padding=1
+        )
         self.linear_time = nn.Linear(d_time, out_channels)
         self.groupnorm_merged = nn.GroupNorm(32, out_channels)
-        self.conv_merged = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv_merged = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, padding=1
+        )
         if in_channels == out_channels:
             self.residual_layer = nn.Identity()
         else:
@@ -55,8 +60,9 @@ class UNET_Residual(nn.module):
 
         return merged + self.residual_layer(residual)
 
+
 class UNET_AttentionBlock(nn.Module):
-    def __init__(self, n_heads: int, n_embed:int, d_context:int = 768):
+    def __init__(self, n_heads: int, n_embed: int, d_context: int = 768):
         super().__init__()
         channels = n_heads * n_embed
 
@@ -66,13 +72,15 @@ class UNET_AttentionBlock(nn.Module):
         # LayerNormalization으로 이미 정규화 되어있기 때문에 bias가 불필요한 오버헤드를 초래할 수 있다고 함
         self.attention_1 = SelfAttention(n_heads, channels, in_proj_bias=False)
         self.layernorm_2 = nn.LayerNorm(channels)
-        self.attention_2 = CrossAttention(n_heads, channels, d_context, in_proj_bias=False)
+        self.attention_2 = CrossAttention(
+            n_heads, channels, d_context, in_proj_bias=False
+        )
         self.layernorm_3 = nn.LayerNorm(channels)
         self.linear_geglu_1 = nn.Linear(channels, 4 * channels * 2)
         self.linear_geglu_2 = nn.Linear(4 * channels, channels)
 
         self.conv_output = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
-    
+
     def forward(self, x: torch.Tensor, context: torch.Tensor):
         # x: (B, C, H, W)
         # context: (B, seq_len, dim)
@@ -84,7 +92,7 @@ class UNET_AttentionBlock(nn.Module):
         n, c, h, w = x.shape
 
         # (B, C, H, W) -> (B, C, H*W)
-        x = x.view((n, c, h*w))
+        x = x.view((n, c, h * w))
         # (B, C, H*W) -> (B, H*W, C)
         x = x.transpose(-1, -2)
 
@@ -112,18 +120,20 @@ class UNET_AttentionBlock(nn.Module):
         x = x.transpose(-1, -2)
         # (B, C, H*W) -> (B, C, H, W)
         x = x.view((n, c, h, w))
-        
+
         return self.conv_output(x) + residual_long
 
 
-    
 class Upsample(nn.module):
-    def __init__(self, channels:int):
+    def __init__(self, channels: int):
         super().__init__()
         self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+
     def forward(self, x):
         # x: (B, C, H, W) -> (B, C, H * 2, W * 2)
-        x = F.interpolate(x, scale_factor=2, mode="nearest") # 기존의 nn.Upsample과 동일한 로직
+        x = F.interpolate(
+            x, scale_factor=2, mode="nearest"
+        )  # 기존의 nn.Upsample과 동일한 로직
         return self.conv(x)
 
 
@@ -156,7 +166,9 @@ class UNET(nn.Module):
                     UNET_ResidualBlock(320, 320), UNET_AttentionBlock(8, 40)
                 ),
                 # (B, 320, H / 8, W / 8) -> (B, 320, H / 16, W / 16)
-                SwitchSequential(nn.Conv2d(320, 320, kernel_size=3, padding=1, stride=2)),
+                SwitchSequential(
+                    nn.Conv2d(320, 320, kernel_size=3, padding=1, stride=2)
+                ),
                 SwitchSequential(
                     UNET_ResidualBlock(320, 640), UNET_AttentionBlock(8, 80)
                 ),
@@ -164,7 +176,9 @@ class UNET(nn.Module):
                     UNET_ResidualBlock(640, 640), UNET_AttentionBlock(8, 80)
                 ),
                 # (B, 640, H / 16, W / 16) -> (B, 640, H / 32, W / 32)
-                SwitchSequential(nn.Conv2d(640, 640, kernel_size=3, padding=1, stride=2)),
+                SwitchSequential(
+                    nn.Conv2d(640, 640, kernel_size=3, padding=1, stride=2)
+                ),
                 SwitchSequential(
                     UNET_ResidualBlock(640, 1280), UNET_AttentionBlock(8, 160)
                 ),
@@ -172,38 +186,65 @@ class UNET(nn.Module):
                     UNET_ResidualBlock(1280, 1280), UNET_AttentionBlock(8, 160)
                 ),
                 # (B, 1280, H / 32, W / 32) -> (B, 1280, H / 64, W / 64)
-                SwitchSequential(nn.Conv2d(1280, 1280, kernel_size=3, padding=1, stride=2)),
+                SwitchSequential(
+                    nn.Conv2d(1280, 1280, kernel_size=3, padding=1, stride=2)
+                ),
                 SwitchSequential(UNET_ResidualBlock(1280, 1280)),
                 # (B, 1280, H / 64, W / 64)
-                SwitchSequential(UNET_ResidualBlock(1280, 1280))
+                SwitchSequential(UNET_ResidualBlock(1280, 1280)),
             ]
         )
 
         self.bottleneck = SwitchSequential(
             UNET_ResidualBlock(1280, 1280),
             UNET_AttentionBlock(8, 160),
-            UNET_ResidualBlock(1280, 1280)
+            UNET_ResidualBlock(1280, 1280),
         )
 
-        self.decoder = nn.Module([
-            # Bottleneck input이 skip connection을 통해 concat 되므로 채널이 2배가 됨
-            # (B, 2560, H / 64, W / 64) -> (B, 1280, H / 64, W / 64)
-            SwitchSequential(UNET_ResidualBlock(2560, 1280)),
-            SwitchSequential(UNET_ResidualBlock(1280, 1280)),
-            # (B, 1280, H / 64, W / 64) -> (B, 1280, H / 32, W / 32)
-            SwitchSequential(UNET_ResidualBlock(1280, 1280), Upsample(1280)),
-            SwitchSequential(UNET_ResidualBlock(2560, 1280), UNET_AttentionBlock(8, 160)),
-            SwitchSequential(UNET_ResidualBlock(2560, 1280), UNET_AttentionBlock(8, 160)),
-            # (B, 1280, H / 32, W / 32) -> (B, 1280, H / 16, W / 16)
-            SwitchSequential(UNET_ResidualBlock(1920, 1280), UNET_AttentionBlock(8, 160), Upsample(1280)),
-            SwitchSequential(UNET_ResidualBlock(1920, 640), UNET_AttentionBlock(8, 80)),
-            SwitchSequential(UNET_ResidualBlock(1280, 640), UNET_AttentionBlock(8, 80)),
-            # (B, 640, H / 16, W / 16) -> (B, 640, H / 8, W / 8)
-            SwitchSequential(UNET_ResidualBlock(640, 640), UNET_AttentionBlock(8, 80), Upsample(640)),
-            SwitchSequential(UNET_ResidualBlock(960, 320), UNET_AttentionBlock(8, 40)),
-            SwitchSequential(UNET_ResidualBlock(640, 320), UNET_AttentionBlock(8, 80)), # TODO: 이건 뭐지?
-            SwitchSequential(UNET_ResidualBlock(640, 320), UNET_AttentionBlock(8, 40)),
-        ])
+        self.decoder = nn.Module(
+            [
+                # Bottleneck input이 skip connection을 통해 concat 되므로 채널이 2배가 됨
+                # (B, 2560, H / 64, W / 64) -> (B, 1280, H / 64, W / 64)
+                SwitchSequential(UNET_ResidualBlock(2560, 1280)),
+                SwitchSequential(UNET_ResidualBlock(1280, 1280)),
+                # (B, 1280, H / 64, W / 64) -> (B, 1280, H / 32, W / 32)
+                SwitchSequential(UNET_ResidualBlock(1280, 1280), Upsample(1280)),
+                SwitchSequential(
+                    UNET_ResidualBlock(2560, 1280), UNET_AttentionBlock(8, 160)
+                ),
+                SwitchSequential(
+                    UNET_ResidualBlock(2560, 1280), UNET_AttentionBlock(8, 160)
+                ),
+                # (B, 1280, H / 32, W / 32) -> (B, 1280, H / 16, W / 16)
+                SwitchSequential(
+                    UNET_ResidualBlock(1920, 1280),
+                    UNET_AttentionBlock(8, 160),
+                    Upsample(1280),
+                ),
+                SwitchSequential(
+                    UNET_ResidualBlock(1920, 640), UNET_AttentionBlock(8, 80)
+                ),
+                SwitchSequential(
+                    UNET_ResidualBlock(1280, 640), UNET_AttentionBlock(8, 80)
+                ),
+                # (B, 640, H / 16, W / 16) -> (B, 640, H / 8, W / 8)
+                SwitchSequential(
+                    UNET_ResidualBlock(640, 640),
+                    UNET_AttentionBlock(8, 80),
+                    Upsample(640),
+                ),
+                SwitchSequential(
+                    UNET_ResidualBlock(960, 320), UNET_AttentionBlock(8, 40)
+                ),
+                SwitchSequential(
+                    UNET_ResidualBlock(640, 320), UNET_AttentionBlock(8, 80)
+                ),  # TODO: 이건 뭐지?
+                SwitchSequential(
+                    UNET_ResidualBlock(640, 320), UNET_AttentionBlock(8, 40)
+                ),
+            ]
+        )
+
 
 class UNET_OutputLayer(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
@@ -229,7 +270,7 @@ class Diffusion(nn.Module):
         self.final = UNET_OutputLayer(320, 4)
 
     def forward(
-        self, latent: torch.Tensor, prompt: torch.Tensor, time: torch.Tensor
+        self, latent: torch.Tensor, context: torch.Tensor, time: torch.Tensor
     ) -> torch.Tensor:
         # latent: (B, 4, H / 8, W / 8)
         # context: (B, seq_len, d_embed)
